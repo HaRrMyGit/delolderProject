@@ -1,0 +1,150 @@
+#!/bin/bash
+
+set -euo pipefail
+
+show_help() {
+    cat << EOF
+Usage: delolder [-v|-d] N [--] dirs
+
+Deletes files older then N days from directory.
+
+Args:
+  N                 Amount of days
+
+Options:
+  -v                (verbose) - shows deleted files
+  -d                (dry-run) - shows files to delete, but doesn't delete them
+  --                Конец опций - remaining args count as directories
+  dirs              directories (at least one)
+
+Examples:
+  delolder 10 -d tmp obj backup    Dry-run for files older then 10 days
+  delolder 10 tmp obj backup -d    Same as previous
+  delolder 10 tmp obj -- backup -d Deleting files
+
+EOF
+}
+
+VERBOSE=0
+DRY_RUN=0
+DAYS=""
+DIRS=()
+END_OPTS=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --)
+            END_OPTS=1
+            shift
+            ;;
+        -v)
+            if [[ $END_OPTS -eq 0 ]]; then
+                VERBOSE=1
+            else
+                DIRS+=("$1")
+            fi
+            shift
+            ;;
+        -d)
+            if [[ $END_OPTS -eq 0 ]]; then
+                DRY_RUN=1
+            else
+                DIRS+=("$1")
+            fi
+            shift
+            ;;
+        -*)
+            if [[ $END_OPTS -eq 0 ]]; then
+                echo "Delolder: invalid option '$1'" >&2
+                echo "Use -h for help" >&2
+                exit 1
+            else
+                DIRS+=("$1")
+            fi
+            shift
+            ;;
+        *)
+            if [[ -z "$DAYS" ]] && [[ $END_OPTS -eq 0 ]]; then
+                if [[ "$1" =~ ^[0-9]+$ ]]; then
+                    DAYS="$1"
+                else
+                    echo "Delolder: days count must be an integer, got '$1'" >&2
+                    exit 1
+                fi
+            else
+                DIRS+=("$1")
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$DAYS" ]]; then
+    echo "Delolder: days count undefined" >&2
+    echo "Use -h for help" >&2
+    exit 1
+fi
+
+if [[ ${#DIRS[@]} -eq 0 ]]; then
+    echo "Delolder: directories undefined" >&2
+    echo "Use -h for help" >&2
+    exit 1
+fi
+
+UNIQUE_DIRS=()
+for dir in "${DIRS[@]}"; do
+    if [[ ! -d "$dir" ]]; then
+        echo "Warning: directory '$dir' doesn't exist or undefined" >&2
+        continue
+    fi
+    
+    abs_dir=$(realpath -m "$dir" 2>/dev/null || echo "$dir")
+    if [[ ! " ${UNIQUE_DIRS[@]} " =~ " ${abs_dir} " ]]; then
+        UNIQUE_DIRS+=("$abs_dir")
+    fi
+done
+
+if [[ ${#UNIQUE_DIRS[@]} -eq 0 ]]; then
+    echo "Delolder: no valid directories" >&2
+    exit 1
+fi
+
+FIND_OPTS=()
+if [[ $VERBOSE -eq 1 ]] || [[ $DRY_RUN -eq 1 ]]; then
+    FIND_OPTS+=(-print)
+fi
+
+if [[ $DRY_RUN -eq 0 ]]; then
+    FIND_OPTS+=(-delete)
+fi
+
+ERROR_COUNT=0
+for dir in "${UNIQUE_DIRS[@]}"; do
+    
+    if [[ ! "$DAYS" =~ ^[0-9]+$ ]]; then
+        echo "Error: DAYS must be a positive integer" >&2
+        exit 1
+    fi
+    
+    days_offset=$((DAYS - 1))
+    
+    if find "$dir" -maxdepth 1 -type f -mtime "+${days_offset}" "${FIND_OPTS[@]}" 2>/dev/null; then
+        if [[ $VERBOSE -eq 1 ]] || [[ $DRY_RUN -eq 1 ]]; then
+            :
+        fi
+    else
+        echo "  Warning: catalog '$dir' wasn't processed properly" >&2
+        ((ERROR_COUNT++))
+    fi
+    echo "" >&2
+done
+
+if [[ $ERROR_COUNT -gt 0 ]]; then
+    exit 1
+fi
+
+exit 0
